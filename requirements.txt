@@ -1,0 +1,8 @@
+transformers==4.57.3
+torch==2.9.0
+datasets==4.0.0
+tokenizers==0.22.1
+evaluate
+requests
+beautifulsoup4
+huggingface_hub
