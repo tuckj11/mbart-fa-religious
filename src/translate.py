@@ -16,7 +16,7 @@ import sys
 import torch
 from transformers import MBartForConditionalGeneration, MBart50TokenizerFast
 
-MODEL_NAME = "your-username/mbart-fa-religious-final"  # replace with your HF model path
+MODEL_NAME = "tuckj90/mbart-fa-religious"
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
