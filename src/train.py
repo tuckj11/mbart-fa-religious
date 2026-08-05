@@ -25,7 +25,8 @@ Usage:
         --base-model facebook/mbart-large-50-many-to-many-mmt \\
         --src-lang en_XX --tgt-lang fa_IR \\
         --epochs 3 --learning-rate 2e-5 \\
-        --batch-size 1 --grad-accum-steps 8
+        --batch-size 4 --grad-accum-steps 8 \\
+        --warmup-ratio 0.1 --weight-decay 0.01 --num-beams 4
 
     # Push the result to the Hugging Face Hub when done:
     python train.py --data-file dataset.jsonl --output-dir my-model --push-to-hub my-username/my-model
@@ -78,10 +79,63 @@ def parse_args() -> argparse.Namespace:
     # Training hyperparameters
     parser.add_argument("--epochs", type=float, default=3)
     parser.add_argument("--learning-rate", type=float, default=2e-5)
-    parser.add_argument("--batch-size", type=int, default=1, help="Per-device train/eval batch size.")
-    parser.add_argument("--grad-accum-steps", type=int, default=8)
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=4,
+        help="Per-device train/eval batch size. Increase if your GPU has memory "
+        "headroom -- combined with --grad-accum-steps this sets the effective "
+        "batch size (default 4 x 8 = 32).",
+    )
+    parser.add_argument(
+        "--grad-accum-steps",
+        type=int,
+        default=8,
+        help="Gradient accumulation steps. Effective batch size = "
+        "--batch-size x --grad-accum-steps.",
+    )
+    parser.add_argument(
+        "--warmup-ratio",
+        type=float,
+        default=0.1,
+        help="Fraction of total training steps used for linear LR warmup "
+        "before ramping to --learning-rate. Helps stabilize early fine-tuning "
+        "of a large pretrained model.",
+    )
+    parser.add_argument(
+        "--weight-decay",
+        type=float,
+        default=0.01,
+        help="AdamW weight decay, a standard regularizer to reduce overfitting.",
+    )
+    parser.add_argument(
+        "--num-beams",
+        type=int,
+        default=4,
+        help="Beam search width used during eval/generation (predict_with_generate). "
+        "num_beams=1 is greedy decoding; 4-5 is a common default that noticeably "
+        "improves translation quality over greedy at modest extra eval cost.",
+    )
     parser.add_argument("--label-smoothing", type=float, default=0.1)
-    parser.add_argument("--eval-save-steps", type=int, default=10000)
+    parser.add_argument(
+        "--eval-save-strategy",
+        choices=["epoch", "steps"],
+        default="epoch",
+        help="'epoch' (default) evaluates/saves once per epoch, so the last "
+        "epoch's checkpoint always aligns exactly with the true end of "
+        "training -- no remainder-steps problem. 'steps' evaluates/saves "
+        "every --eval-save-steps steps instead; use this only if you want "
+        "checkpoints more granular than once per epoch, and be aware any "
+        "steps after the last save point are trained but never checkpointed.",
+    )
+    parser.add_argument(
+        "--eval-save-steps",
+        type=int,
+        default=5000,
+        help="Only used when --eval-save-strategy=steps. Pick a value that "
+        "divides evenly into your expected total steps "
+        "(train_examples / effective_batch_size * epochs).",
+    )
     parser.add_argument("--logging-steps", type=int, default=10)
     parser.add_argument("--save-total-limit", type=int, default=2)
     parser.add_argument("--fp16", action="store_true", default=True)
@@ -109,6 +163,21 @@ def main() -> None:
     split = dataset.train_test_split(test_size=args.test_size)
     train_dataset, eval_dataset = split["train"], split["test"]
     print(f"Train examples: {len(train_dataset)} | Eval examples: {len(eval_dataset)}")
+
+    effective_batch_size = args.batch_size * args.grad_accum_steps
+    steps_per_epoch = max(1, len(train_dataset) // effective_batch_size)
+    total_steps = int(steps_per_epoch * args.epochs)
+    print(
+        f"Effective batch size: {effective_batch_size} | "
+        f"Steps/epoch: {steps_per_epoch} | Estimated total steps: {total_steps}"
+    )
+    if args.eval_save_strategy == "steps" and args.eval_save_steps > total_steps:
+        print(
+            f"WARNING: --eval-save-steps ({args.eval_save_steps}) is larger than the "
+            f"estimated total steps ({total_steps}). Evaluation will never fire during "
+            f"training -- consider lowering it (e.g. total_steps // 3), or use "
+            f"--eval-save-strategy epoch instead."
+        )
 
     # --- Load base model and tokenizer ---
     tokenizer = MBart50TokenizerFast.from_pretrained(args.base_model)
@@ -147,17 +216,20 @@ def main() -> None:
         per_device_eval_batch_size=args.batch_size,
         gradient_accumulation_steps=args.grad_accum_steps,
         learning_rate=args.learning_rate,
+        warmup_ratio=args.warmup_ratio,
+        weight_decay=args.weight_decay,
         num_train_epochs=args.epochs,
         fp16=args.fp16,
         logging_steps=args.logging_steps,
-        eval_steps=args.eval_save_steps,
-        eval_strategy="steps",
-        save_steps=args.eval_save_steps,
-        save_strategy="steps",
+        eval_strategy=args.eval_save_strategy,
+        eval_steps=args.eval_save_steps if args.eval_save_strategy == "steps" else None,
+        save_strategy=args.eval_save_strategy,
+        save_steps=args.eval_save_steps if args.eval_save_strategy == "steps" else None,
         save_total_limit=args.save_total_limit,
         load_best_model_at_end=True,
         metric_for_best_model="eval_loss",
         predict_with_generate=True,
+        generation_num_beams=args.num_beams,
         remove_unused_columns=True,
         label_smoothing_factor=args.label_smoothing,
         push_to_hub=bool(args.push_to_hub),
@@ -179,6 +251,14 @@ def main() -> None:
 
     # --- Train ---
     trainer.train()
+
+    # --- Confirm final metrics ---
+    # Because load_best_model_at_end=True, the trainer has already swapped in
+    # whichever evaluated checkpoint had the lowest eval_loss -- this call
+    # doesn't produce a "new" number, it just prints that checkpoint's metrics
+    # clearly rather than requiring you to dig them out of the training logs.
+    final_metrics = trainer.evaluate()
+    print("Metrics for the best (saved) checkpoint:", final_metrics)
 
     # --- Save locally ---
     trainer.save_model(args.output_dir)
