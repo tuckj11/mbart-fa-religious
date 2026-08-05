@@ -16,7 +16,7 @@ import sys
 import torch
 from transformers import MBartForConditionalGeneration, MBart50TokenizerFast
 
-MODEL_NAME = "tuckj90/mbart-fa-religious"
+MODEL_NAME = "your-username/mbart-fa-religious-final"  # replace with your HF model path
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -24,13 +24,14 @@ tokenizer = MBart50TokenizerFast.from_pretrained(MODEL_NAME, src_lang="en_XX")
 model = MBartForConditionalGeneration.from_pretrained(MODEL_NAME).to(DEVICE)
 
 
-def translate(text: str) -> str:
-    """Translate a single English string to Persian."""
+def translate(text: str, num_beams: int = 4) -> str:
+    """Translate a single English string to Persian using beam search."""
     encoded = tokenizer(text, return_tensors="pt").to(DEVICE)
 
     generated_tokens = model.generate(
         **encoded,
         forced_bos_token_id=tokenizer.lang_code_to_id["fa_IR"],
+        num_beams=num_beams,
     )
 
     return tokenizer.decode(generated_tokens[0], skip_special_tokens=True)
