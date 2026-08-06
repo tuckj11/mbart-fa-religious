@@ -18,6 +18,8 @@ Off-the-shelf multilingual MT models handle general-purpose text reasonably well
    This trades dataset size for alignment quality — noisy sentence alignment is one of the most common failure modes in parallel-corpus MT projects, so bad pairs are dropped rather than kept.
 3. **Result:** ~49,000 aligned sentence pairs, split 90/10 into train/test.
 
+Training data was derived from copyrighted materials published by The Church of Jesus Christ of Latter-day Saints; this model is a personal/educational project and is not affiliated with or endorsed by the Church.
+
 ## Model & Training
 
 | Setting | Value |
