@@ -116,7 +116,18 @@ def parse_args() -> argparse.Namespace:
         "num_beams=1 is greedy decoding; 4-5 is a common default that noticeably "
         "improves translation quality over greedy at modest extra eval cost.",
     )
-    parser.add_argument("--label-smoothing", type=float, default=0.1)
+    parser.add_argument(
+        "--label-smoothing",
+        type=float,
+        default=0.0,
+        help="Label smoothing factor. Defaults to 0 -- with mBART-50's large "
+        "(250k-token) vocabulary, label smoothing's second loss term sums "
+        "over the entire vocabulary and can dominate the reported training "
+        "loss, making it look far worse than the model's real performance "
+        "(eval_loss, computed without smoothing, is unaffected). Set > 0 "
+        "if you specifically want the regularization and are aware the "
+        "training loss number will look inflated as a result.",
+    )
     parser.add_argument(
         "--eval-save-strategy",
         choices=["epoch", "steps"],
@@ -191,15 +202,9 @@ def main() -> None:
         tgt = [x["fa"] for x in batch["translation"]]
 
         model_inputs = tokenizer(
-            src, max_length=args.max_length, truncation=True, padding=True
+            src, text_target=tgt, max_length=args.max_length, truncation=True
         )
 
-        with tokenizer.as_target_tokenizer():
-            labels = tokenizer(
-                tgt, max_length=args.max_length, truncation=True, padding=True
-            )["input_ids"]
-
-        model_inputs["labels"] = labels
         return model_inputs
 
     train_tokenized = train_dataset.map(
@@ -237,15 +242,30 @@ def main() -> None:
     )
 
     data_collator = DataCollatorForSeq2Seq(
-        tokenizer, model=model, label_pad_token_id=tokenizer.pad_token_id
+        tokenizer, model=model, label_pad_token_id=-100
     )
+
+    # --- Generation config fixes ---
+    # mBART-50's pretrained checkpoint ships forced_bos_token_id in model.config,
+    # which newer transformers versions reject at save time (generation params
+    # belong in model.generation_config, not model.config). Clear the legacy
+    # copy and set the correct values in the right place.
+    #
+    # Critically, decoder_start_token_id must stay as the eos token (matching
+    # model.config.decoder_start_token_id, used during training's label-shifting) --
+    # NOT the target language tag. Setting it to the language tag here breaks
+    # inference: generation would skip the true start-of-sequence state the
+    # decoder was actually trained on, misaligning every generated token.
+    model.generation_config.decoder_start_token_id = tokenizer.eos_token_id
+    model.generation_config.forced_bos_token_id = tokenizer.lang_code_to_id[args.tgt_lang]
+    model.config.forced_bos_token_id = None
 
     trainer = Seq2SeqTrainer(
         model=model,
         args=training_args,
         train_dataset=train_tokenized,
         eval_dataset=eval_tokenized,
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
         data_collator=data_collator,
     )
 
