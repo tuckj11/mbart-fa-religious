@@ -2,7 +2,7 @@
 
 A fine-tuned neural machine translation model for English-to-Persian (Farsi) translation of religious and doctrinal text, built end-to-end: custom web-scraped parallel corpus → strict alignment filtering → fine-tuning `facebook/mbart-large-50-many-to-many-mmt` → evaluation.
 
-**Model on Hugging Face:** [mbart-fa-religious-final]([url](https://huggingface.co/tuckj90/mbart-fa-religious-final)))
+**Model on Hugging Face:** [mbart-fa-religious-final]([url](https://huggingface.co/tuckj90/mbart-fa-religious-final))
 
 ## Overview
 
